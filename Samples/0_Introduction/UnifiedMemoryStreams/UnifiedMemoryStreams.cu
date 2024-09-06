@@ -37,7 +37,11 @@
 
 /*
 * Unified Memory介绍
-* TODO：
+* cuda unified memory是一种在CUDA编程模型中使用的内存管理机制。
+* 它允许开发者以一种统一的方式访问和管理CPU和GPU的内存，从而简化了编程的复杂性。
+* 在Unified Memory模型中，CUDA会自动管理数据在CPU和GPU之间的迁移，使得数据能够在需要的时候出现在正确的位置上。
+* 这种机制消除了手动管理数据传输的需要，使得代码更加简洁和易于维护。
+* 此外，Unified Memory还提供了内存超额订阅功能，即可以分配超过物理GPU内存大小的内存空间，CUDA会在需要时自动进行数据的换入换出。
 */
 
 // system includes
@@ -108,6 +112,7 @@ struct Task {
     checkCudaErrors(cudaFree(vector));
   }
 
+  // 若是通过无参构造函数Task()构造的Task，可以继续调用allocate来分配unified memory
   void allocate(const unsigned int s, const unsigned int unique_id) {
     // allocate unified memory outside of constructor
     id = unique_id;
@@ -118,6 +123,7 @@ struct Task {
     checkCudaErrors(cudaDeviceSynchronize());
 
     // populate data with random elements
+    // 数据初始化，随机值
     for (unsigned int i = 0; i < size * size; i++) {
       data[i] = drand48();
     }
@@ -143,6 +149,13 @@ typedef struct threadData_t threadData;
 
 // simple host dgemv: assume data is in row-major format and square
 template <typename T>
+// 在CPU上执行dgemv，假设数据是行优先存储，且矩阵是个方阵
+/*
+* [row-major format]介绍
+* 概述：将多维数组打平成一维数组
+* 在计算机科学中，多维数组（如矩阵）可以以行优先或列优先的方式存储在内存中。
+* 在行优先格式中，数组的元素首先按行填充，即首先填充第一行的所有元素，然后是第二行，依此类推。（此处举例是二维矩阵，按行打平）
+*/
 void gemv(int m, int n, T alpha, T *A, T *x, T beta, T *result) {
   // rows
   for (int i = 0; i < n; i++) {
@@ -155,6 +168,8 @@ void gemv(int m, int n, T alpha, T *A, T *x, T beta, T *result) {
 }
 
 // execute a single task on either host or device depending on size
+// 执行一个task，根据task的size决定是在CPU还是在GPU上运行
+// size < 100 在CPU上执行，否则在GPU上执行
 #ifdef USE_PTHREADS
 void *execute(void *inpArgs) {
   threadData *dataPtr = (threadData *)inpArgs;
@@ -251,6 +266,7 @@ void execute(Task<T> &t, cublasHandle_t *handle, cudaStream_t *stream,
 #endif
 
 // populate a list of tasks with random sizes
+// 初始化Task，其size被初始化为随机数
 template <typename T>
 void initialise_tasks(std::vector<Task<T> > &TaskList) {
   for (unsigned int i = 0; i < TaskList.size(); i++) {
@@ -291,6 +307,12 @@ int main(int argc, char **argv) {
   const int nthreads = 4;
 
   // number of streams = number of threads
+  /*
+  * [stream]介绍
+  * CUDA的stream（流）是一种处理并行操作的方式，它允许开发者在CUDA程序中组织和管理并发执行的任务。
+  * 通过使用不同的流，可以并行执行多个核函数（kernels）或内存传输操作，从而实现更高的硬件利用率和程序性能。
+  * 此处创建了streams数组，可以让多个thread在不同的stream中并发执行（并发的内存操作，并发的kernel执行）
+  */
   cudaStream_t *streams = new cudaStream_t[nthreads + 1];
   cublasHandle_t *handles = new cublasHandle_t[nthreads + 1];
 
