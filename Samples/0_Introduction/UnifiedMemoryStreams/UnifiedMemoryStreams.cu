@@ -135,11 +135,26 @@ struct Task {
   }
 };
 
+/*
+* [stream]介绍
+* CUDA的stream（流）是一种处理并行操作的方式，它允许开发者在CUDA程序中组织和管理并发执行的任务。
+* 通过使用不同的流，可以并行执行多个核函数（kernels）或内存传输操作，从而实现更高的硬件利用率和程序性能。
+* 此处创建了streams数组，可以让多个thread在不同的stream中并发执行（并发的内存操作，并发的kernel执行）
+*/
+
+/*
+* [cublasHandle_t]介绍
+* CUDA Basic Linear Algebra Subprograms（cuBLAS）库是NVIDIA提供的一个用于执行基本线性代数运算的GPU加速库。
+* cublasHandle_t是cuBLAS库中用于表示一个cuBLAS上下文（context）的句柄（handle）。
+* 这个句柄被用来调用cuBLAS库中的函数。
+*/
 #ifdef USE_PTHREADS
 struct threadData_t {
   int tid;
   Task<double> *TaskListPtr;
+  // streams是个数组，不同thread可以运行在不同的stream，stream之间是并行的。
   cudaStream_t *streams;
+  // handles成员是指向cublasHandle_t类型的指针，它可能指向一个包含多个cuBLAS句柄的数组。这样，不同的线程或任务就可以使用不同的cuBLAS句柄来并行执行线性代数运算。
   cublasHandle_t *handles;
   int taskSize;
 };
@@ -187,13 +202,21 @@ void *execute(void *inpArgs) {
 
       // attach managed memory to a (dummy) stream to allow host access while
       // the device is running
+      // CPU计算默认使用stream[0]，也即只使用了一个stream
       checkCudaErrors(
+
+          // [cudaStreamAttachMemAsync]函数，是CUDA Runtime API 中的一个函数
+          // 它用于将一个或多个内存区域附加到指定的流上
+          // 这个操作允许开发者对内存访问进行更细粒度的控制，特别是在使用统一内存（Unified Memory）时，该函数尤其有用。
+          // 此处是将主机内存的mem，附加到stream上
           cudaStreamAttachMemAsync(stream[0], t.data, 0, cudaMemAttachHost));
       checkCudaErrors(
           cudaStreamAttachMemAsync(stream[0], t.vector, 0, cudaMemAttachHost));
       checkCudaErrors(
           cudaStreamAttachMemAsync(stream[0], t.result, 0, cudaMemAttachHost));
+
       // necessary to ensure Async cudaStreamAttachMemAsync calls have finished
+      // [cudaStreamSynchronize]函数，等待stream的操作完成
       checkCudaErrors(cudaStreamSynchronize(stream[0]));
       // call the host operation
       gemv(t.size, t.size, 1.0, t.data, t.vector, 0.0, t.result);
@@ -205,6 +228,8 @@ void *execute(void *inpArgs) {
       double zero = 0.0;
 
       // attach managed memory to my stream
+      // GPU计算，每个thread使用一个stream，因为stream[0]是CPU在用，tid是从0开始的，所以每个thread使用的是stream[tid+1]
+      // 绑定cublasHandle句柄和stream
       checkCudaErrors(cublasSetStream(handle[tid + 1], stream[tid + 1]));
       checkCudaErrors(cudaStreamAttachMemAsync(stream[tid + 1], t.data, 0,
                                                cudaMemAttachSingle));
@@ -251,6 +276,8 @@ void execute(Task<T> &t, cublasHandle_t *handle, cudaStream_t *stream,
 
     // attach managed memory to my stream
     checkCudaErrors(cublasSetStream(handle[tid + 1], stream[tid + 1]));
+
+    // cudaMemAttachSingle，表示内存区域将被单个流访问
     checkCudaErrors(cudaStreamAttachMemAsync(stream[tid + 1], t.data, 0,
                                              cudaMemAttachSingle));
     checkCudaErrors(cudaStreamAttachMemAsync(stream[tid + 1], t.vector, 0,
@@ -258,6 +285,8 @@ void execute(Task<T> &t, cublasHandle_t *handle, cudaStream_t *stream,
     checkCudaErrors(cudaStreamAttachMemAsync(stream[tid + 1], t.result, 0,
                                              cudaMemAttachSingle));
     // call the device operation
+    // 调用cublasDgemv函数（BLAS库提供的，cublas_v2.h）
+    // 此处没有像CPU上一样调用cudaStreamSynchronize，TODO
     checkCudaErrors(cublasDgemv(handle[tid + 1], CUBLAS_OP_N, t.size, t.size,
                                 &one, t.data, t.size, t.vector, 1, &zero,
                                 t.result, 1));
@@ -307,12 +336,7 @@ int main(int argc, char **argv) {
   const int nthreads = 4;
 
   // number of streams = number of threads
-  /*
-  * [stream]介绍
-  * CUDA的stream（流）是一种处理并行操作的方式，它允许开发者在CUDA程序中组织和管理并发执行的任务。
-  * 通过使用不同的流，可以并行执行多个核函数（kernels）或内存传输操作，从而实现更高的硬件利用率和程序性能。
-  * 此处创建了streams数组，可以让多个thread在不同的stream中并发执行（并发的内存操作，并发的kernel执行）
-  */
+
   cudaStream_t *streams = new cudaStream_t[nthreads + 1];
   cublasHandle_t *handles = new cublasHandle_t[nthreads + 1];
 
@@ -338,13 +362,13 @@ int main(int argc, char **argv) {
     InputToThreads[i].tid = i;
     InputToThreads[i].streams = streams;
     InputToThreads[i].handles = handles;
-
+    // 划分任务到thread
     if ((TaskList.size() / nthreads) == 0) {
       InputToThreads[i].taskSize = (TaskList.size() / nthreads);
-      InputToThreads[i].TaskListPtr =
+      InputToThreads[i].TaskListPtr = // 指向任务数组的首地址，+taskSize就可以实现任务的遍历
           &TaskList[i * (TaskList.size() / nthreads)];
     } else {
-      if (i == nthreads - 1) {
+      if (i == nthreads - 1) { // 最后一个thread多干点活
         InputToThreads[i].taskSize =
             (TaskList.size() / nthreads) + (TaskList.size() % nthreads);
         InputToThreads[i].TaskListPtr =
