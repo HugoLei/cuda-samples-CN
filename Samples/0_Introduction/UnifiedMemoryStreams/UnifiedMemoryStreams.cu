@@ -30,6 +30,16 @@
  * with all data in Unified Memory, and tasks consumed by both host and device
  */
 
+/*
+* 此示例使用线程和流实现了一个简单的任务消费者
+* 所有数据都在统一内存中，任务由主机和设备共同消耗
+*/
+
+/*
+* Unified Memory介绍
+* TODO：
+*/
+
 // system includes
 #include <cstdio>
 #include <ctime>
@@ -69,9 +79,24 @@ struct Task {
   Task(unsigned int s) : size(s), id(0), data(NULL), result(NULL) {
     // allocate unified memory -- the operation performed in this example will
     // be a DGEMV
+    // 这个例子中的逻辑是执行DGEMV
+    // DGEMV 密集型通用矩阵-向量乘法（Dense General Matrix-Vector Multiplication）
+
+    /* 
+    * cudaMallocManaged函数介绍
+    * 是 CUDA 编程中的一个重要函数，它用于在 CUDA 程序中分配一块可由 CPU 和 GPU 共同访问和管理的内存。
+    * 这种内存称为托管内存（managed memory）。
+    * 使用托管内存可以大大简化数据在 CPU 和 GPU 之间的传输过程，因为 CUDA 运行时会自动处理这些内存的数据迁移，从而减少了程序员的负担。
+    */
     checkCudaErrors(cudaMallocManaged(&data, sizeof(T) * size * size));
     checkCudaErrors(cudaMallocManaged(&result, sizeof(T) * size));
     checkCudaErrors(cudaMallocManaged(&vector, sizeof(T) * size));
+
+    /*
+    * cudaDeviceSynchronize函数介绍
+    * 是CUDA Runtime API中的一个函数，用于等待直到所有之前提交的CUDA命令都完成。
+    * 这包括在调用cudaDeviceSynchronize之前的所有CUDA内核启动、内存复制和内存分配操作等。
+    */
     checkCudaErrors(cudaDeviceSynchronize());
   }
 
